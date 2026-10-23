@@ -120,7 +120,7 @@ def test_integration_enrichment(schemas):
 def test_http_service(schemas):
     directory = MockDirectory(schemas)
     http = TestClient(create_app(lambda: directory))
-    assert http.get("/health").json() == {"status": "ok", "backend": "mock"}
+    assert http.get("/health").json() == {"status": "ok", "backend": "mock", "auth": False, "cache_seconds": 0}
     response = http.get("/ci/" + STUDENT, params={"failed_side": "target"})
     assert response.status_code == 200 and response.json()["resolver_group"] == "Data Squad"
     assert http.get("/ci/Nope").status_code == 404
@@ -196,3 +196,37 @@ def test_disabled_cross_schema_references_stop_apply_before_objects(client, fake
         schema["crossSchemaReferencingAllowed"] = True
     again = provision.run(client, schemas, apply=True)
     assert again.count("blocked") == 0 and len(fake.state.data["objects"]) == 8
+
+
+# ---------------------------------------------------------------- API key and cache
+
+def test_api_key_is_required_when_configured(schemas):
+    directory = MockDirectory(schemas)
+    http = TestClient(create_app(lambda: directory, api_key="s3cret"))
+    assert http.get("/health").status_code == 200                      # health stays open
+    assert http.get("/health").json()["auth"] is True
+    assert http.get("/ci/EDW").status_code == 401                      # no key
+    assert http.get("/ci/EDW", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert http.get("/ci/EDW", headers={"Authorization": "Bearer s3cret"}).status_code == 200
+    assert http.get("/ci/EDW", headers={"X-API-Key": "s3cret"}).status_code == 200
+    assert http.get("/ci/Nope", headers={"X-API-Key": "s3cret"}).status_code == 404
+
+
+def test_responses_are_cached_per_ci_and_failed_side(schemas):
+    directory = MockDirectory(schemas)
+    http = TestClient(create_app(lambda: directory, cache_seconds=60))
+    first = http.get("/ci/EDW").json()
+    lookups_after_first = directory.lookups
+    second = http.get("/ci/EDW").json()
+    assert (first["enrichment"]["cached"], second["enrichment"]["cached"]) == (False, True)
+    assert directory.lookups == lookups_after_first                    # served without new lookups
+    assert {k: v for k, v in second.items() if k != "enrichment"} == {k: v for k, v in first.items() if k != "enrichment"}
+    other = http.get("/ci/" + STUDENT, params={"failed_side": "target"}).json()
+    assert other["enrichment"]["cached"] is False and directory.lookups > lookups_after_first
+
+
+def test_cache_disabled_with_zero(schemas):
+    directory = MockDirectory(schemas)
+    http = TestClient(create_app(lambda: directory, cache_seconds=0))
+    http.get("/ci/EDW")
+    assert http.get("/ci/EDW").json()["enrichment"]["cached"] is False

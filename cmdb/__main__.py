@@ -158,7 +158,10 @@ def cmd_lookup(args, schemas, config) -> int:
 def cmd_serve(args, schemas, config) -> int:
     import uvicorn
     from .server import create_app
-    uvicorn.run(create_app(_directory_factory(config, schemas)), host=args.host, port=args.port, log_level="info")
+    if not config.api_key:
+        print("WARNING: CMDB_API_KEY is not set: /ci requests are not authenticated (fine for local use only).")
+    app = create_app(_directory_factory(config, schemas), api_key=config.api_key, cache_seconds=config.cache_seconds)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0
 
 

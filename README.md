@@ -22,6 +22,7 @@ schemas/*.yaml + data/*.csv ──cmdb apply──▶ Jira Assets ◀── cmdb
 
 ```bash
 cp .env.example .env        # JIRA_SITE, JIRA_EMAIL, JIRA_API_TOKEN (a read-only account is enough)
+                            # and CMDB_API_KEY:  openssl rand -hex 32
 docker compose up -d --build
 ```
 
@@ -34,10 +35,12 @@ The container is named `observability-cmdb`.
 ### Try it
 
 ```bash
-curl http://localhost:8090/health
-# {"status":"ok","backend":"jira"}
+export CMDB_API_KEY=$(grep '^CMDB_API_KEY=' .env | cut -d= -f2)
 
-curl http://localhost:8090/ci/EDW
+curl http://localhost:8090/health
+# {"status":"ok","backend":"jira","auth":true,"cache_seconds":60.0}
+
+curl -H "Authorization: Bearer $CMDB_API_KEY" http://localhost:8090/ci/EDW
 ```
 
 ```json
@@ -57,17 +60,17 @@ curl http://localhost:8090/ci/EDW
     ]
   },
   "details": {"aliases": "EDW (SVC_IDM) | EDW(DI_SMS_EDW) | EDW (di_edw_cms) | EDW / StudentOne", "hosting": ""},
-  "enrichment": {"backend": "jira", "at": "2026-10-24T07:30:00+00:00", "lookups": 3}
+  "enrichment": {"backend": "jira", "at": "2026-10-24T07:30:00+00:00", "lookups": 3, "cached": false}
 }
 ```
 
 The example shows one of the four integrations. An integration CI works the same way; URL-encode the name:
 
 ```bash
-curl "http://localhost:8090/ci/ETL%20-%20DXMULTI-0001%20%3A%20AppEvents%20from%20SMS%20to%20EDW%20-%20Student"
+curl -H "Authorization: Bearer $CMDB_API_KEY" "http://localhost:8090/ci/ETL%20-%20DXMULTI-0001%20%3A%20AppEvents%20from%20SMS%20to%20EDW%20-%20Student"
 # resolver_group: Current Students, root_ci: the integration itself, impact: 1
 
-curl "http://localhost:8090/ci/ETL%20-%20DXMULTI-0001%20%3A%20AppEvents%20from%20SMS%20to%20EDW%20-%20Student?failed_side=target"
+curl -H "Authorization: Bearer $CMDB_API_KEY" "http://localhost:8090/ci/ETL%20-%20DXMULTI-0001%20%3A%20AppEvents%20from%20SMS%20to%20EDW%20-%20Student?failed_side=target"
 # root_ci: EDW, resolver_group: Data Squad, informed: Current Students, impact: 4
 ```
 
@@ -75,8 +78,8 @@ curl "http://localhost:8090/ci/ETL%20-%20DXMULTI-0001%20%3A%20AppEvents%20from%2
 
 | Endpoint | Response |
 |---|---|
-| `GET /health` | `{"status": "ok", "backend": "jira"}` |
-| `GET /ci/{ci_name}` | enrichment JSON (above). **404** with `"found": false` for an unknown CI; **502** if Jira is unreachable |
+| `GET /health` | `{"status": "ok", "backend": "jira", "auth": true, "cache_seconds": 60}`. No key needed (for health checks) |
+| `GET /ci/{ci_name}` | enrichment JSON (above). **401** without a valid key; **404** with `"found": false` for an unknown CI; **502** if Jira is unreachable |
 | `GET /ci/{ci_name}?failed_side=source\|target` | for an integration CI: treat its source or target application as the root CI, with that application's impact |
 
 Root CI rules:
@@ -84,14 +87,34 @@ Root CI rules:
 - **Connector:** itself. The impact is every integration whose Connector CIs include it.
 - **Integration:** itself, unless `failed_side` is given.
 
-Each request reads Jira Assets directly, with a few AQL queries per CI (`lookups` in the response).
-Nothing is cached, so changes made in Jira show up immediately.
+### Security and caching
+
+**API key.** When `CMDB_API_KEY` is set, every `/ci` request must send it, as
+`Authorization: Bearer <key>` or `X-API-Key: <key>`, or it gets 401. `/health` stays open.
+- **Generate a key** with `openssl rand -hex 32` and share it only with callers (Keep).
+- **Empty key:** the API is unauthenticated, which is only acceptable on your own machine. The
+  service logs a warning at start-up.
+
+**Why it matters.** The API reads Jira with its own service account and returns your integration
+landscape: systems, resolver groups, dependencies. Without the key, anyone who can reach the port
+gets that, plus the account's read access.
+- **Locally,** the port is bound to `127.0.0.1` only.
+- **In production,** don't publish the port at all: Keep reaches it on the internal network. Put it
+  behind your gateway if anything outside needs it.
+
+**Cache.** Each CI's response (per `failed_side`) is cached for `CMDB_CACHE_SECONDS` (default 60).
+- **Why:** a burst of alerts for the same CI makes one round of Jira queries (3–9 AQL calls) instead
+  of one per alert, which keeps the service clear of Atlassian's API rate limits.
+- **What it shows:** `"cached": true` in `enrichment` marks a cached response. `lookups` is the number
+  of Jira queries made when the response was built.
+- **Trade-off:** changes made in Jira show up within that many seconds. Set `0` to disable; errors
+  are never cached.
 
 ### From the observability platform (Keep)
 
-Platform containers call `http://cmdb:8080/ci/{ci_name}`, where `ci_name` is the label every
-Prometheus alert carries. The stacks can start in any order. A Keep workflow step looks roughly like
-this (check the syntax against your Keep version):
+Platform containers call `http://cmdb:8080/ci/{ci_name}` with the API key, where `ci_name` is the
+label every Prometheus alert carries. The stacks can start in any order. Give Keep the key as a
+secret. A Keep workflow step looks roughly like this (check the syntax against your Keep version):
 
 ```yaml
 - name: enrich-from-cmdb
@@ -100,6 +123,8 @@ this (check the syntax against your Keep version):
     with:
       method: GET
       url: "http://cmdb:8080/ci/{{ alert.labels.ci_name }}"
+      headers:
+        Authorization: "Bearer {{ secrets.CMDB_API_KEY }}"
 ```
 
 The ticket templates in the platform repo (`docs/incident-templates.md`) take their **Resolver**,
@@ -153,8 +178,9 @@ account for both while testing.
      later.
    - While it's off, `apply` stops before creating any objects, and `preflight` marks it ✗.
 5. **`cmdb apply`** again. It continues where it stopped and creates the 8 objects.
-6. **`cmdb plan`** should report `0 create, 0 update`, and `curl http://localhost:8090/ci/EDW` should
-   return Data Squad with 4 affected integrations.
+6. **`cmdb plan`** should report `0 create, 0 update`, and
+   `curl -H "Authorization: Bearer $CMDB_API_KEY" http://localhost:8090/ci/EDW` should return Data Squad
+   with 4 affected integrations.
 
 The full checklist for the Jira team is in [docs/jira-team-handover.md](docs/jira-team-handover.md).
 
@@ -196,6 +222,8 @@ as a secret) on a platform.
 | `JIRA_EMAIL`, `JIRA_API_TOKEN` | yes | read-only account for the service; admin only for `apply` |
 | `CMDB_BACKEND` | no | `jira` (default) or `mock` (read the local `data/*.csv`; no Jira needed) |
 | `ASSETS_WORKSPACE_ID` | no | discovered from `JIRA_SITE` when empty |
+| `CMDB_API_KEY` | yes, except locally | key callers send on `/ci` requests; empty = unauthenticated (local only) |
+| `CMDB_CACHE_SECONDS` | no | per-CI response cache (default 60; `0` disables) |
 | `CMDB_HOST_PORT` | no | host port of the API (default 8090) |
 
 ### Running without Docker Compose
@@ -235,7 +263,8 @@ The tests run against an in-repo fake of the Assets API (`tests/fake_assets.py`)
 - descriptions too long for Jira;
 - disabled cross-schema references;
 - the Jira and mock backends giving identical enrichment;
-- the HTTP API.
+- the HTTP API, including the API key (401 without it, both header styles, open `/health`) and the
+  per-CI cache.
 
 The real-Jira path was verified end to end against a live Jira Cloud site: `apply`, a second `plan`
 with no changes, and the lookups above.

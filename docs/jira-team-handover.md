@@ -65,7 +65,7 @@ docker compose exec cmdb cmdb preflight    # read-only: access, schema keys, cro
 docker compose exec cmdb cmdb plan         # read-only: prerequisites, then the list of changes
 docker compose exec cmdb cmdb apply        # re-checks, shows the plan, asks "Apply N change(s)? [y/N]"
 docker compose exec cmdb cmdb plan         # expect: 0 create, 0 update
-curl http://localhost:8090/ci/EDW          # read back: resolver group Data Squad, impact 4 integrations
+curl -H "Authorization: Bearer <CMDB_API_KEY>" http://localhost:8090/ci/EDW   # read back: Data Squad, impact 4
 ```
 
 **Not using Compose?** Open a shell in the container (`docker exec -it observability-cmdb sh`) and run
@@ -75,6 +75,8 @@ curl http://localhost:8090/ci/EDW          # read back: resolver group Data Squa
 - `apply` needs **Assets admin** rights. Pass an admin token just for that command:
   `docker compose exec -e JIRA_EMAIL=… -e JIRA_API_TOKEN=… cmdb cmdb apply`.
 - The running service only needs **read** access.
+- The API itself is protected by `CMDB_API_KEY` (set it in `.env` or as a secret). Callers send it as
+  `Authorization: Bearer <key>`.
 
 `plan` output marks each item:
 
