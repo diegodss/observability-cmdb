@@ -18,6 +18,32 @@ schemas/*.yaml + data/*.csv ──cmdb apply──▶ Jira Assets ◀── cmdb
   - [observability-platform](https://github.com/diegodss/observability-platform): Prometheus, Grafana, alerting, and Keep later;
   - this repo.
 
+## Quick start (3 steps)
+
+The CMDB is already set up in the dev Jira (`nextbitfx-dev.atlassian.net`). To run the API against it,
+you need Docker and an Atlassian account with read access to the Applications, Connectors and
+Integrations Assets schemas.
+
+```bash
+# 1. Clone and configure: set JIRA_EMAIL and JIRA_API_TOKEN in .env (everything else is pre-filled)
+git clone https://github.com/diegodss/observability-cmdb.git && cd observability-cmdb && cp .env.example .env
+
+# 2. Start
+docker compose up -d --build
+
+# 3. Try it
+curl -H "Authorization: Bearer local-dev-cmdb-key" http://localhost:8090/ci/EDW
+```
+
+Expected in step 3:
+- `"resolver_group": "Data Squad"` and `"impact": {"count": 4, …}`, listing the 4 DXMULTI-0001
+  integrations;
+- `"routing": {"project": "OPS", "labels": ["resolver-data-squad"], …}`.
+
+API token: https://id.atlassian.com/manage-profile/security/api-tokens. `local-dev-cmdb-key` is the
+static development key from `.env.example`; use a real secret anywhere shared (see "Security and
+caching").
+
 ## What's in the CMDB
 
 The CIs and their relationships. Arrows show the data flow: source system → integration → target
@@ -89,8 +115,8 @@ the output between the markers above.
 ## Run the service
 
 ```bash
-cp .env.example .env        # JIRA_SITE, JIRA_EMAIL, JIRA_API_TOKEN (a read-only account is enough)
-                            # and CMDB_API_KEY:  openssl rand -hex 32
+cp .env.example .env        # set JIRA_EMAIL, JIRA_API_TOKEN (a read-only account is enough);
+                            # the rest is pre-filled for the dev site
 docker compose up -d --build
 ```
 
@@ -103,7 +129,7 @@ The container is named `observability-cmdb`.
 ### Try it
 
 ```bash
-export CMDB_API_KEY=$(grep '^CMDB_API_KEY=' .env | cut -d= -f2)
+export CMDB_API_KEY=local-dev-cmdb-key     # the static dev key from .env.example
 
 curl http://localhost:8090/health
 # {"status":"ok","backend":"jira","auth":true,"cache_seconds":60.0}
@@ -187,9 +213,11 @@ groups:
 
 **API key.** When `CMDB_API_KEY` is set, every `/ci` request must send it, as
 `Authorization: Bearer <key>` or `X-API-Key: <key>`, or it gets 401. `/health` stays open.
-- **Generate a key** with `openssl rand -hex 32` and share it only with callers (Keep).
-- **Empty key:** the API is unauthenticated, which is only acceptable on your own machine. The
-  service logs a warning at start-up.
+- **Development:** `.env.example` ships a static key, `local-dev-cmdb-key`, so local setups work out
+  of the box. It's public (it's in this repo), so treat it as no protection at all.
+- **Shared or production:** replace it with a secret, e.g. `openssl rand -hex 32`, set as the
+  container's `CMDB_API_KEY` secret and shared only with callers (Keep).
+- **Empty key:** the API is unauthenticated. The service logs a warning at start-up.
 
 **Why it matters.** The API reads Jira with its own service account and returns your integration
 landscape: systems, resolver groups, dependencies. Without the key, anyone who can reach the port
@@ -314,11 +342,11 @@ as a secret) on a platform.
 
 | Setting | Required | Notes |
 |---|---|---|
-| `JIRA_SITE` | yes | e.g. `https://your-site.atlassian.net` |
+| `JIRA_SITE` | yes | pre-filled with the dev site, `https://nextbitfx-dev.atlassian.net` |
 | `JIRA_EMAIL`, `JIRA_API_TOKEN` | yes | read-only account for the service; admin only for `apply` |
 | `CMDB_BACKEND` | no | `jira` (default) or `mock` (read the local `data/*.csv`; no Jira needed) |
 | `ASSETS_WORKSPACE_ID` | recommended | the Assets workspace. When empty it's discovered through a Jira Service Management API call, so set it to depend only on the Assets API. `cmdb preflight` prints the ID when it has to discover it |
-| `CMDB_API_KEY` | yes, except locally | key callers send on `/ci` requests; empty = unauthenticated (local only) |
+| `CMDB_API_KEY` | yes | key callers send on `/ci` requests. `.env.example` has the static dev key `local-dev-cmdb-key`; use a secret outside local development |
 | `CMDB_CACHE_SECONDS` | no | per-CI response cache (default 60; `0` disables) |
 | `CMDB_HOST_PORT` | no | host port of the API (default 8090) |
 

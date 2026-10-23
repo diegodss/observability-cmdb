@@ -80,8 +80,9 @@ into `.env`.
 - `apply` needs **Assets admin** rights. Pass an admin token just for that command:
   `docker compose exec -e JIRA_EMAIL=… -e JIRA_API_TOKEN=… cmdb cmdb apply`.
 - The running service only needs **read** access.
-- The API itself is protected by `CMDB_API_KEY` (set it in `.env` or as a secret). Callers send it as
-  `Authorization: Bearer <key>`.
+- The API itself is protected by `CMDB_API_KEY`, and callers send it as `Authorization: Bearer <key>`.
+  `.env.example` ships the static dev key `local-dev-cmdb-key`. In your environment, replace it with
+  a secret, and also set `JIRA_SITE` and `ASSETS_WORKSPACE_ID` to your site.
 
 `plan` output marks each item:
 
