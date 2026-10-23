@@ -1,0 +1,22 @@
+# Proposed Applications schema: the systems integrations read from and write to.
+# If the CMDB team already has an application object type, point the Integrations
+# and Connectors references at theirs instead and drop this schema.
+schema:
+  name: Applications
+  key: APP
+  description: Applications that integrations read from and write to (proposed starting point).
+
+statuses: [Production, Production - To Retire, Development, Retired]
+
+object_types:
+  - name: Application
+    description: A source or target system of integrations.
+    icon: Application
+    data: applications.csv
+    attributes:
+      - {name: Name, type: label}
+      - {name: Description, type: textarea}
+      - {name: Aliases, type: text, description: "Other spellings of the name found in the SOT."}
+      - {name: Resolver Group, type: group, required: true}
+      - {name: Status, type: status, required: true}
+      - {name: Hosting, type: text}

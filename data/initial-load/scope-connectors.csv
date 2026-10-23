@@ -1,0 +1,3 @@
+Name,Connects To,Resolver Group,Status,Description
+CONN - Data Warehouse (EDW) DB,EDW,Integration & Platforms,Production,Boomi database connection to the EDW
+CONN - Technology One Student SOAP - ADF Services,Technology One (SM),Integration & Platforms,Production,Boomi SOAP connection to Technology One Student Management (ADF services)

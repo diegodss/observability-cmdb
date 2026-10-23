@@ -1,0 +1,3 @@
+Name,Description,Aliases,Resolver Group,Status,Hosting
+Technology One (SM),"Student Management system (TechnologyOne): authoritative source of student, curriculum and study plan data.",SMS,Current Students,Production,
+EDW,Enterprise Data Warehouse: consolidates institutional data for reporting and downstream systems.,EDW (SVC_IDM) | EDW(DI_SMS_EDW) | EDW (di_edw_cms) | EDW / StudentOne,Data Squad,Production,

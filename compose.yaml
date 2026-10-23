@@ -1,0 +1,41 @@
+name: observability-cmdb
+
+# CMDB tooling for the observability stack:
+#   docker compose run --rm cmdb plan        show what would be created in Jira Assets (read-only)
+#   docker compose run --rm cmdb apply       create/update the schemas and objects
+#   docker compose run --rm cmdb lookup EDW  enrich one CI (resolver group, impact)
+#   docker compose up -d enricher            HTTP enrichment service for Keep
+
+x-cmdb: &cmdb
+  build: .
+  image: observability-cmdb:local
+  env_file:
+    - path: .env
+      required: false
+  volumes:
+    - ./schemas:/srv/schemas:ro
+    - ./data:/srv/data
+
+services:
+  cmdb:
+    <<: *cmdb
+    profiles: [tools]
+
+  enricher:
+    <<: *cmdb
+    command: ["serve", "--host", "0.0.0.0", "--port", "8080"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${ENRICHER_HOST_PORT:-8090}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).status == 200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+# Shared with observability-env-simulator and observability-platform, so Keep can call
+# http://enricher:8080. Any of the stacks can start first; the second logs a harmless
+# "network was not created for project" warning.
+networks:
+  default:
+    name: observability-sim

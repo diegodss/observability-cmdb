@@ -1,0 +1,47 @@
+# Integrations schema: owned by the integration owner. Attribute names mirror the
+# Integrations SOT columns verbatim (used for the one-off initial load only).
+schema:
+  name: Integrations
+  key: INT
+  description: Integrations between applications; loaded once from the Integrations SOT, managed here afterwards.
+
+statuses: [Production, Production - To Retire, Development, Retired]
+
+reference_types:
+  - {name: Reads from, color: "2CA02C"}
+  - {name: Writes to, color: "D62728"}
+  - {name: Uses, color: "9467BD"}
+
+object_types:
+  - name: Integration
+    description: A scheduled or event-driven data flow between two applications.
+    icon: Integration
+    data: integrations.csv
+    attributes:
+      - {name: Name, type: label}
+      - {name: Description, type: textarea}
+      - {name: Source System, type: reference, schema: Applications, object_type: Application, reference_type: Reads from, required: true}
+      - {name: Target System, type: reference, schema: Applications, object_type: Application, reference_type: Writes to, required: true}
+      - {name: Resolver Group, type: group, required: true}
+      - {name: Status, type: status, required: true}
+      - {name: Platform, type: select, options: [Boomi, SSIS, DataStage, Unix, Other], required: true}
+      - {name: Method, type: text}
+      - {name: Process Type, type: select, options: [ETL, Module, Listener, Web Services Server, SSIS, Test], required: true}
+      - {name: Integration Pattern, type: select, options: [ETL, API, Framework, Event Listener, SFTP Listener]}
+      - {name: Schedule, type: text}
+      - {name: Frequency, type: text}
+      - {name: Volume per execution (MB), type: float}
+      - {name: Volume per week (MB), type: float}
+      - {name: Domain, type: text}
+      - {name: Subdomain, type: text}
+      - {name: Source Hosting, type: text}
+      - {name: Target Hosting, type: text}
+      - {name: Security, type: text}
+      - {name: Legacy (Y/N), type: select, options: [Y, N]}
+      - {name: Log Source, type: text}
+      - {name: Info Source, type: text}
+      - {name: Source Confidence, type: select, options: [High, Medium, Low]}
+      - {name: Connectors, type: text, description: "Full connector list from the SOT, as text."}
+      - {name: Connector CIs, type: reference, schema: Connectors, object_type: Connector, reference_type: Uses, multiple: true}
+      - {name: Git hub location, type: text}
+      - {name: Notes, type: textarea}

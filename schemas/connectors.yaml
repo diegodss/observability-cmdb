@@ -1,0 +1,24 @@
+# Connectors schema (optional): only connectors that exist as CIs, e.g. because they
+# send their own heartbeat. Integrations without connector CIs work unchanged.
+schema:
+  name: Connectors
+  key: CON
+  description: Integration connectors that are monitored as CIs (optional layer).
+
+statuses: [Production, Production - To Retire, Development, Retired]
+
+reference_types:
+  - {name: Connects to, color: "1F77B4"}
+
+object_types:
+  - name: Connector
+    description: A connection an integration uses to reach an application.
+    icon: Connection
+    data: connectors.csv
+    attributes:
+      - {name: Name, type: label}
+      - {name: Description, type: textarea}
+      - {name: Connects To, type: reference, schema: Applications, object_type: Application, reference_type: Connects to}
+      - {name: Platform, type: select, options: [Boomi, SSIS, DataStage, Unix, Other]}
+      - {name: Resolver Group, type: group, required: true}
+      - {name: Status, type: status, required: true}

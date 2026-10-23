@@ -1,0 +1,5 @@
+Integration Name,Resolver Group,Description
+ETL - DXMULTI-0001 : AppEvents from SMS to EDW - Student,Current Students,"Synchronises real-time changes to student profiles, contact details, and disability status from the Student Management system to the Data Warehouse."
+ETL - DXMULTI-0001 : AppEvents from SMS to EDW - Curriculum,Current Students,"Moves updates regarding course structures, units, and study packages to ensure the academic framework is current in downstream systems."
+ETL - DXMULTI-0001 : AppEvents from SMS to EDW - Study Plan,Current Students,"Replicates students' study plans (study package enrolments, applications, offers and states) from the Student Management system to the Data Warehouse."
+ETL - DXMULTI-0001 : AppEvents from SMS to EDW,Current Students,Handles shared foundational data (like organizational units and standard codes) required to keep the other flows contextually accurate.
