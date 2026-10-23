@@ -275,3 +275,33 @@ def test_package_enrichment(schemas):
     assert result["impact"]["count"] == 4 and {r["direction"] for r in result["impact"]["integrations"]} == {"member"}
     assert result["details"]["target_systems"] == [EDW]
     assert enrich(MockDirectory(schemas), STUDENT)["details"]["package"] == PACKAGE
+
+
+# ---------------------------------------------------------------- ticket routing
+
+def test_routing_uses_labels_until_a_project_is_set():
+    from cmdb.model import route
+    routing = {"default_project": "OPS", "label_prefix": "resolver-",
+               "groups": {"Data Squad": {"project": None}, "Current Students": {"project": "CS"}}}
+    assert route("Data Squad", routing) == {"resolver_group": "Data Squad", "mode": "label",
+                                            "project": "OPS", "labels": ["resolver-data-squad"]}
+    assert route("Current Students", routing) == {"resolver_group": "Current Students", "mode": "project",
+                                                  "project": "CS", "labels": ["resolver-current-students"]}
+
+
+def test_validate_requires_every_resolver_group_in_routing(schemas, tmp_path):
+    import shutil
+    from cmdb import model as model_module
+    for f in model_module.DATA_DIR.glob("*.csv"):
+        shutil.copy(f, tmp_path / f.name)
+    (tmp_path / "routing.yaml").write_text("default_project: ops\ngroups:\n  Data Squad: {project: }\n")
+    problems = model_module.validate(schemas, tmp_path)
+    assert any("default_project 'ops' is not a Jira project key" in p for p in problems)
+    assert any("'Current Students' is used in data/*.csv but has no entry" in p for p in problems)
+
+
+def test_lookups_include_routing(schemas):
+    edw = enrich(MockDirectory(schemas), EDW)
+    assert edw["routing"] == {"resolver_group": "Data Squad", "mode": "label", "project": "OPS",
+                              "labels": ["resolver-data-squad"]}
+    assert enrich(MockDirectory(schemas), STUDENT)["routing"]["labels"] == ["resolver-current-students"]

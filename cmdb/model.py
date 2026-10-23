@@ -151,6 +151,43 @@ def _package_problems(schemas: list[Schema], directory: Path) -> list[str]:
     return problems
 
 
+ROUTING_FILE = "routing.yaml"
+PROJECT_KEY = re.compile(r"^[A-Z][A-Z0-9_]{1,9}$")
+
+
+def load_routing(directory: Path = DATA_DIR) -> dict:
+    path = directory / ROUTING_FILE
+    doc = yaml.safe_load(path.read_text()) if path.exists() else {}
+    return {"default_project": str(doc.get("default_project") or ""), "label_prefix": str(doc.get("label_prefix", "resolver-")),
+            "groups": {str(k): (v or {}) for k, v in (doc.get("groups") or {}).items()}}
+
+
+def route(resolver_group: str, routing: dict) -> dict:
+    """Ticket destination for a resolver group: its own project if set, else the default project + a label."""
+    slug = re.sub(r"[^a-z0-9]+", "-", (resolver_group or "unassigned").lower()).strip("-")
+    project = str((routing["groups"].get(resolver_group) or {}).get("project") or "")
+    return {"resolver_group": resolver_group, "mode": "project" if project else "label",
+            "project": project or routing["default_project"], "labels": [routing["label_prefix"] + slug]}
+
+
+def _routing_problems(schemas: list[Schema], directory: Path) -> list[str]:
+    if not (directory / ROUTING_FILE).exists():
+        return [f"data/{ROUTING_FILE} is missing"]
+    routing = load_routing(directory)
+    problems = []
+    if not PROJECT_KEY.match(routing["default_project"]):
+        problems.append(f"{ROUTING_FILE}: default_project '{routing['default_project']}' is not a Jira project key")
+    for group, entry in routing["groups"].items():
+        project = str(entry.get("project") or "")
+        if project and not PROJECT_KEY.match(project):
+            problems.append(f"{ROUTING_FILE}: project '{project}' for '{group}' is not a Jira project key")
+    used = {v for s in schemas for t in s.object_types for a in t.attributes if a.type == "group"
+            for r in load_objects(t, directory) for v in a.values(r.get(a.name, ""))}
+    problems += [f"{ROUTING_FILE}: resolver group '{g}' is used in data/*.csv but has no entry under groups"
+                 for g in sorted(used - set(routing["groups"]))]
+    return problems
+
+
 def validate(schemas: list[Schema], directory: Path = DATA_DIR) -> list[str]:
     """Offline checks of the schema files and data, the way an import would see them."""
     problems = []
@@ -187,7 +224,7 @@ def validate(schemas: list[Schema], directory: Path = DATA_DIR) -> list[str]:
                         error = _value_error(attribute, value, schema, names)
                         if error:
                             problems.append(f"{label} '{row.get('Name')}': {attribute.name}: {error}")
-    return problems + _package_problems(schemas, directory)
+    return problems + _package_problems(schemas, directory) + _routing_problems(schemas, directory)
 
 
 def _value_error(attribute: Attribute, value: str, schema: Schema, names: dict) -> str | None:

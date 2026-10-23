@@ -137,6 +137,8 @@ def cmd_lookup(args, schemas, config) -> int:
             ("Root CI", root["name"] if root["name"] != ci["name"] else "itself"),
             ("Resolver group", result["resolver_group"]),
             ("Informed", ", ".join(result["informed_groups"]) or "-"),
+            ("Ticket", f"project {result['routing']['project']}, label {', '.join(result['routing']['labels'])}"
+                       f" ({result['routing']['mode']} routing)"),
             ("Impact", f"{result['impact']['count']} integration(s); {', '.join(result['impact']['domains']) or '-'}")]
     for key, value in result["details"].items():
         if isinstance(value, dict):

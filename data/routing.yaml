@@ -1,0 +1,14 @@
+# Where incident tickets go for each resolver group. Returned by the API as `routing`,
+# so the alert pipeline (Keep) never hard-codes it.
+#
+# Today: every ticket is created in `default_project` with a label per resolver group.
+# Later: set a squad's `project` (its Jira project key) and its tickets go there instead.
+# No code change; `cmdb validate` checks every resolver group in data/*.csv is listed here.
+
+default_project: OPS      # placeholder project key: change to your real one
+label_prefix: resolver-   # label = prefix + group name in lower case, spaces as hyphens
+
+groups:
+  Current Students: {project: }
+  Data Squad: {project: }
+  Integration Squad: {project: }

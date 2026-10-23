@@ -269,7 +269,11 @@ def preflight(client: AssetsClient, schemas: list[Schema]) -> list[tuple[str, bo
     checks = []
     try:
         existing = client.schemas()
-        checks.append(("Jira Assets access", True, f"workspace reachable, {len(existing)} existing schema(s)"))
+        discovered = client.base.rstrip("/").split("/workspace/")[-1].split("/")[0]
+        source = ("from ASSETS_WORKSPACE_ID" if client.config.workspace_id else
+                  "set ASSETS_API_BASE" if client.config.api_base else
+                  f"discovered via the JSM API; set ASSETS_WORKSPACE_ID={discovered} to skip that call")
+        checks.append(("Jira Assets access", True, f"workspace reachable ({source}), {len(existing)} existing schema(s)"))
     except Exception as exc:  # noqa: BLE001 - reported to the user
         return [("Jira Assets access", False, str(exc))]
     by_name = {s.get("name"): s for s in existing}

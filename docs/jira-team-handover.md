@@ -59,7 +59,7 @@ The repo runs as **one service** (`cmdb`): an always-on enrichment API, with the
 inside it.
 
 ```bash
-cp .env.example .env     # JIRA_SITE, JIRA_EMAIL, JIRA_API_TOKEN
+cp .env.example .env     # JIRA_SITE, JIRA_EMAIL, JIRA_API_TOKEN, ASSETS_WORKSPACE_ID (see below)
 docker compose up -d --build
 docker compose exec cmdb cmdb validate     # offline
 docker compose exec cmdb cmdb preflight    # read-only: access, schema keys, cross-schema, every resolver group
@@ -68,6 +68,10 @@ docker compose exec cmdb cmdb apply        # re-checks, shows the plan, asks "Ap
 docker compose exec cmdb cmdb plan         # expect: 0 create, 0 update
 curl -H "Authorization: Bearer <CMDB_API_KEY>" http://localhost:8090/ci/EDW   # read back: Data Squad, impact 4
 ```
+
+**Workspace ID:** set `ASSETS_WORKSPACE_ID` so the tool only uses the Assets API. Otherwise it finds
+the workspace through a Jira Service Management endpoint, and `cmdb preflight` prints the ID to copy
+into `.env`.
 
 **Not using Compose?** Open a shell in the container (`docker exec -it observability-cmdb sh`) and run
 `cmdb preflight`, `cmdb plan`, `cmdb apply`. See "Running without Docker Compose" in the README.

@@ -14,6 +14,7 @@ Root CI rules:
 from datetime import datetime, timezone
 
 from .directory import Directory
+from .model import load_routing, route
 
 FAILED_SIDES = {None, "self", "source", "target"}
 
@@ -92,6 +93,7 @@ def enrich(directory: Directory, name: str, failed_side: str | None = None) -> d
         "root_ci": _summary(root),
         "resolver_group": resolver,
         "informed_groups": informed,
+        "routing": route(resolver, load_routing()),
         "impact": {"integrations": impact, "count": len(impact),
                    "domains": sorted({f"{r['domain']} / {r['subdomain']}".strip(" /") for r in impact} - {""})},
         "details": details,
