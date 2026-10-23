@@ -11,8 +11,24 @@ reference_types:
   - {name: Reads from, color: "2CA02C"}
   - {name: Writes to, color: "D62728"}
   - {name: Uses, color: "9467BD"}
+  - {name: Part of, color: "FF7F0E"}
 
 object_types:
+  # One per integration ID (e.g. DXMULTI-0001). Its systems, connectors and resolver group are
+  # DERIVED from its member integrations by `initial-load`; `validate` flags any mismatch.
+  # Its graph in Jira shows every member integration, both systems and the connectors in one view.
+  - name: Integration Package
+    description: All integrations sharing one integration ID.
+    icon: Integration
+    data: integration-packages.csv
+    attributes:
+      - {name: Name, type: label}
+      - {name: Description, type: textarea}
+      - {name: Source System, type: reference, schema: Applications, object_type: Application, reference_type: Reads from, multiple: true}
+      - {name: Target System, type: reference, schema: Applications, object_type: Application, reference_type: Writes to, multiple: true}
+      - {name: Connector CIs, type: reference, schema: Connectors, object_type: Connector, reference_type: Uses, multiple: true}
+      - {name: Resolver Group, type: group, description: "Set when all member integrations share one resolver group."}
+
   - name: Integration
     description: A scheduled or event-driven data flow between two applications.
     icon: Integration
@@ -20,6 +36,7 @@ object_types:
     attributes:
       - {name: Name, type: label}
       - {name: Description, type: textarea}
+      - {name: Package, type: reference, schema: Integrations, object_type: Integration Package, reference_type: Part of}
       - {name: Source System, type: reference, schema: Applications, object_type: Application, reference_type: Reads from, required: true}
       - {name: Target System, type: reference, schema: Applications, object_type: Application, reference_type: Writes to, required: true}
       - {name: Resolver Group, type: group, required: true}

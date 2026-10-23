@@ -11,10 +11,11 @@ environment.
 | Applications (`APP`) | Application | Technology One (SM), EDW |
 | Connectors (`CON`), optional | Connector | CONN - Data Warehouse (EDW) DB, CONN - Technology One Student SOAP - ADF Services |
 | Integrations (`INT`) | Integration | ETL - DXMULTI-0001 : AppEvents from SMS to EDW (+ Student, Curriculum, Study Plan) |
+| Integrations (`INT`) | Integration Package | DXMULTI-0001 (groups the 4 integrations; its systems, connectors and resolver group are derived from them) |
 
 Also created, per schema:
 - status types `Production`, `Production - To Retire`, `Development`, `Retired`;
-- reference types `Connects to`, `Reads from`, `Writes to`, `Uses`;
+- reference types `Connects to`, `Reads from`, `Writes to`, `Uses`, `Part of`;
 - the attributes in `schemas/*.yaml`.
 
 `apply` only **creates and updates**:

@@ -14,6 +14,7 @@ from fake_assets import create_fake
 EDW = "EDW"
 STUDENT = "ETL - DXMULTI-0001 : AppEvents from SMS to EDW - Student"
 EDW_CONNECTOR = "CONN - Data Warehouse (EDW) DB"
+PACKAGE = "DXMULTI-0001"
 
 
 @pytest.fixture
@@ -49,7 +50,7 @@ def test_apply_builds_everything_and_is_idempotent(client, fake, schemas):
     assert first.count("drift") == 0
     data = fake.state.data
     assert sorted(s["name"] for s in data["schemas"].values()) == ["Applications", "Connectors", "Integrations"]
-    assert len(data["objects"]) == 8  # 2 applications, 2 connectors, 4 integrations
+    assert len(data["objects"]) == 9  # 2 applications, 2 connectors, 1 package, 4 integrations
 
     second = provision.run(client, schemas, apply=False)
     assert (second.count("create"), second.count("update")) == (0, 0), \
@@ -83,12 +84,13 @@ def _comparable(result: dict) -> dict:
         if result.get("details", {}).get(side):
             result["details"][side] = {k: v for k, v in result["details"][side].items() if k != "key"}
     if "details" in result and "connector_cis" in result["details"]:
-        result["details"]["connector_cis"] = [{k: v for k, v in c.items() if k != "key"} for c in result["details"]["connector_cis"]]
+        result["details"]["connector_cis"] = [{k: v for k, v in c.items() if k != "key"} if isinstance(c, dict) else c
+                                              for c in result["details"]["connector_cis"]]
     return result
 
 
 @pytest.mark.parametrize("name,failed_side", [(EDW, None), (STUDENT, None), (STUDENT, "target"),
-                                              (EDW_CONNECTOR, None), ("Unknown CI", None)])
+                                              (EDW_CONNECTOR, None), (PACKAGE, None), ("Unknown CI", None)])
 def test_jira_and_mock_backends_agree(client, schemas, name, failed_side):
     provision.run(client, schemas, apply=True)
     jira = enrich(JiraDirectory(schemas, client), name, failed_side)
@@ -160,7 +162,7 @@ def test_unverifiable_groups_block_apply_unless_skipped(cli, client, fake, schem
     assert cli.cmd_provision(_args("apply", yes=True), schemas, client.config) == 1
     assert not fake.state.data["schemas"]
     assert cli.cmd_provision(_args("apply", yes=True, skip_group_check=True), schemas, client.config) == 0
-    assert len(fake.state.data["objects"]) == 8
+    assert len(fake.state.data["objects"]) == 9
 
 
 def test_apply_without_terminal_or_yes_does_not_change_anything(cli, client, fake, schemas, monkeypatch, capsys):
@@ -183,7 +185,7 @@ def test_too_long_description_is_dropped_with_a_warning(client, fake, schemas):
     result = provision.run(client, schemas, apply=True)
     warns = [a for a in result.actions if a.verb == "warn"]
     assert len(warns) == 3 and all("too long for Assets" in w.detail for w in warns)
-    assert len(fake.state.data["schemas"]) == 3 and len(fake.state.data["objects"]) == 8
+    assert len(fake.state.data["schemas"]) == 3 and len(fake.state.data["objects"]) == 9
 
 
 def test_disabled_cross_schema_references_stop_apply_before_objects(client, fake, schemas):
@@ -195,7 +197,7 @@ def test_disabled_cross_schema_references_stop_apply_before_objects(client, fake
     for schema in fake.state.data["schemas"].values():   # the admin enables the setting in the UI
         schema["crossSchemaReferencingAllowed"] = True
     again = provision.run(client, schemas, apply=True)
-    assert again.count("blocked") == 0 and len(fake.state.data["objects"]) == 8
+    assert again.count("blocked") == 0 and len(fake.state.data["objects"]) == 9
 
 
 # ---------------------------------------------------------------- API key and cache
@@ -230,3 +232,46 @@ def test_cache_disabled_with_zero(schemas):
     http = TestClient(create_app(lambda: directory, cache_seconds=0))
     http.get("/ci/EDW")
     assert http.get("/ci/EDW").json()["enrichment"]["cached"] is False
+
+
+def test_diagram_has_every_ci_and_relationship(schemas):
+    from cmdb.diagram import mermaid
+    text = mermaid(schemas)
+    assert text.startswith("flowchart LR")
+    for name in (EDW, "Technology One (SM)", STUDENT, EDW_CONNECTOR):
+        assert name in text
+    assert text.count("-->|reads from|") == 4 and text.count("-->|writes to|") == 4
+    assert text.count("-.->|connects to|") == 2 and text.count(" -.-> ") == 8   # 4 integrations x 2 connectors
+    assert '["Package DXMULTI-0001"]' in text and text.count("subgraph") == 1
+
+
+
+# ---------------------------------------------------------------- integration packages
+
+def test_package_is_derived_from_its_integrations(schemas):
+    from cmdb.model import derive_packages, load_objects, package_id
+    assert package_id(STUDENT) == PACKAGE and package_id("No id here") == ""
+    integrations = load_objects(next(t for s in schemas for t in s.object_types if t.name == "Integration"))
+    (package,) = derive_packages(integrations)
+    assert package["Name"] == PACKAGE and package["Source System"] == "Technology One (SM)"
+    assert package["Target System"] == EDW and package["Resolver Group"] == "Current Students"
+    assert package["Connector CIs"] == f"{EDW_CONNECTOR} | CONN - Technology One Student SOAP - ADF Services"
+
+
+def test_validate_flags_a_package_that_no_longer_matches(schemas, monkeypatch, tmp_path):
+    import shutil
+    from cmdb import model as model_module
+    for f in (model_module.DATA_DIR).glob("*.csv"):
+        shutil.copy(f, tmp_path / f.name)
+    path = tmp_path / "integration-packages.csv"
+    path.write_text(path.read_text().replace(",EDW,", ",Technology One (SM),"))
+    problems = model_module.validate(schemas, tmp_path)
+    assert any("Target System" in p and "its integrations give 'EDW'" in p for p in problems)
+
+
+def test_package_enrichment(schemas):
+    result = enrich(MockDirectory(schemas), PACKAGE)
+    assert result["ci"]["type"] == "Integration Package" and result["resolver_group"] == "Current Students"
+    assert result["impact"]["count"] == 4 and {r["direction"] for r in result["impact"]["integrations"]} == {"member"}
+    assert result["details"]["target_systems"] == [EDW]
+    assert enrich(MockDirectory(schemas), STUDENT)["details"]["package"] == PACKAGE

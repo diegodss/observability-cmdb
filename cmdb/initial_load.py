@@ -15,7 +15,7 @@ import csv
 import re
 from pathlib import Path
 
-from .model import DATA_DIR, Schema
+from .model import DATA_DIR, Schema, derive_packages, package_id
 
 SCOPE_DIR = DATA_DIR / "initial-load"
 NUMERIC = {"Volume per execution (MB)", "Volume per week (MB)"}
@@ -88,6 +88,7 @@ def run(sot_path: Path, schemas: list[Schema], scope_dir: Path = SCOPE_DIR, out_
         for connector in used:
             connector_platforms[connector].add(row["Platform"].strip())
         out["Connector CIs"] = " | ".join(used)
+        out["Package"] = package_id(name)
         integration_rows.append(out)
 
     app_names = {app["Name"] for app in applications}
@@ -103,8 +104,9 @@ def run(sot_path: Path, schemas: list[Schema], scope_dir: Path = SCOPE_DIR, out_
 
     application_rows = [{**app, "Hosting": " | ".join(sorted(hosting[app["Name"]]))} for app in applications]
 
+    package_rows = derive_packages(integration_rows)
     counts = {"applications": len(application_rows), "connectors": len(connector_rows),
-              "integrations": len(integration_rows), "sot_rows": len(sot)}
+              "packages": len(package_rows), "integrations": len(integration_rows), "sot_rows": len(sot)}
     if problems:
         return counts, problems
     _write(out_dir / "applications.csv", _columns(schemas, "Application"), application_rows)
@@ -113,5 +115,6 @@ def run(sot_path: Path, schemas: list[Schema], scope_dir: Path = SCOPE_DIR, out_
         _write(connector_file, _columns(schemas, "Connector"), connector_rows)
     elif connector_file.exists():
         connector_file.unlink()  # connectors are optional: no scope file, no Connector objects
+    _write(out_dir / "integration-packages.csv", _columns(schemas, "Integration Package"), package_rows)
     _write(out_dir / "integrations.csv", integration_columns, integration_rows)
     return counts, problems

@@ -9,6 +9,7 @@
     serve [--host H] [--port P]
                              run the HTTP enrichment service
     initial-load SOT_CSV     regenerate data/*.csv from the Integrations SOT (once)
+    diagram                  print a Mermaid diagram of the CIs and relationships (from data/*.csv)
 """
 
 import argparse
@@ -16,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import initial_load, model, provision
+from . import diagram, initial_load, model, provision
 from .assets import AssetsClient, AssetsError
 from .config import Config
 from .directory import JiraDirectory, MockDirectory
@@ -141,7 +142,7 @@ def cmd_lookup(args, schemas, config) -> int:
         if isinstance(value, dict):
             value = f"{value['name']} (resolver: {value['resolver_group']})"
         elif isinstance(value, list):
-            value = ", ".join(v["name"] for v in value) or "-"
+            value = ", ".join(v["name"] if isinstance(v, dict) else v for v in value) or "-"
         rows.append((key.replace("_", " ").capitalize().replace(" cis", " CIs"), value or "-"))
     width = max(len(k) for k, _ in rows)
     for key, value in rows:
@@ -165,14 +166,20 @@ def cmd_serve(args, schemas, config) -> int:
     return 0
 
 
+def cmd_diagram(_args, schemas, _config) -> int:
+    print(diagram.mermaid(schemas), end="")
+    return 0
+
+
 def cmd_initial_load(args, schemas, _config) -> int:
     counts, problems = initial_load.run(Path(args.sot), schemas)
     for problem in problems:
         print(f"PROBLEM: {problem}")
     if problems:
         return 1
-    print(f"Wrote {counts['applications']} applications, {counts['connectors']} connectors and "
-          f"{counts['integrations']} integrations from {counts['sot_rows']} SOT rows")
+    print(f"Wrote {counts['applications']} applications, {counts['connectors']} connectors, "
+          f"{counts['packages']} integration package(s) and {counts['integrations']} integrations "
+          f"from {counts['sot_rows']} SOT rows")
     return 0
 
 
@@ -197,11 +204,12 @@ def main() -> int:
     p.add_argument("--port", type=int, default=8080)
     p = sub.add_parser("initial-load")
     p.add_argument("sot")
+    sub.add_parser("diagram")
     args = parser.parse_args()
     schemas = model.load_schemas()
     config = Config.from_env()
     handler = {"validate": cmd_validate, "preflight": cmd_preflight, "plan": cmd_provision, "apply": cmd_provision, "lookup": cmd_lookup,
-               "serve": cmd_serve, "initial-load": cmd_initial_load}[args.command]
+               "serve": cmd_serve, "initial-load": cmd_initial_load, "diagram": cmd_diagram}[args.command]
     try:
         return handler(args, schemas, config)
     except AssetsError as exc:

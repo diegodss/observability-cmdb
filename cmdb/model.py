@@ -98,6 +98,59 @@ def load_objects(object_type: ObjectType, directory: Path = DATA_DIR) -> list[di
         return list(csv.DictReader(handle))
 
 
+PACKAGE_ID = re.compile(r"\b([A-Z]{4,}-\d{4}[a-z]?)\b")
+
+
+def package_id(integration_name: str) -> str:
+    """The integration ID in an integration's name, e.g. 'DXMULTI-0001'; '' if none."""
+    match = PACKAGE_ID.search(integration_name)
+    return match.group(1) if match else ""
+
+
+def derive_packages(integrations: list[dict]) -> list[dict]:
+    """Integration Package rows derived from the integrations that carry each ID."""
+    def multi(rows, column):
+        return " | ".join(sorted({v.strip() for r in rows for v in r.get(column, "").split(MULTI_SEPARATOR) if v.strip()}))
+
+    groups: dict[str, list[dict]] = {}
+    for row in integrations:
+        if package_id(row["Name"]):
+            groups.setdefault(package_id(row["Name"]), []).append(row)
+    packages = []
+    for name, rows in sorted(groups.items()):
+        resolvers = {r.get("Resolver Group", "") for r in rows}
+        sources, targets = multi(rows, "Source System"), multi(rows, "Target System")
+        packages.append({
+            "Name": name,
+            "Description": f"{len(rows)} integration(s) with ID {name}: {sources or '?'} to {targets or '?'}",
+            "Source System": sources, "Target System": targets, "Connector CIs": multi(rows, "Connector CIs"),
+            "Resolver Group": resolvers.pop() if len(resolvers) == 1 else "",
+        })
+    return packages
+
+
+def _package_problems(schemas: list[Schema], directory: Path) -> list[str]:
+    types = {t.name: t for s in schemas for t in s.object_types}
+    if "Integration Package" not in types or "Integration" not in types:
+        return []
+    integrations = load_objects(types["Integration"], directory)
+    stored = {r["Name"]: r for r in load_objects(types["Integration Package"], directory)}
+    problems = [f"Integration '{r['Name']}': Package should be '{package_id(r['Name'])}', not '{r.get('Package', '')}'"
+                for r in integrations if r.get("Package", "") != package_id(r["Name"])]
+    columns = [a.name for a in types["Integration Package"].attributes]
+    for derived in derive_packages(integrations):
+        current = stored.pop(derived["Name"], None)
+        if current is None:
+            problems.append(f"Integration Package '{derived['Name']}' is missing; run initial-load to regenerate it")
+            continue
+        for column in columns:
+            if column in derived and current.get(column, "") != derived[column]:
+                problems.append(f"Integration Package '{derived['Name']}': {column} is '{current.get(column, '')}' "
+                                f"but its integrations give '{derived[column]}'")
+    problems += [f"Integration Package '{name}' has no integrations" for name in stored]
+    return problems
+
+
 def validate(schemas: list[Schema], directory: Path = DATA_DIR) -> list[str]:
     """Offline checks of the schema files and data, the way an import would see them."""
     problems = []
@@ -134,7 +187,7 @@ def validate(schemas: list[Schema], directory: Path = DATA_DIR) -> list[str]:
                         error = _value_error(attribute, value, schema, names)
                         if error:
                             problems.append(f"{label} '{row.get('Name')}': {attribute.name}: {error}")
-    return problems
+    return problems + _package_problems(schemas, directory)
 
 
 def _value_error(attribute: Attribute, value: str, schema: Schema, names: dict) -> str | None:

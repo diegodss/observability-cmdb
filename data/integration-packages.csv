@@ -1,0 +1,2 @@
+Name,Description,Source System,Target System,Connector CIs,Resolver Group
+DXMULTI-0001,4 integration(s) with ID DXMULTI-0001: Technology One (SM) to EDW,Technology One (SM),EDW,CONN - Data Warehouse (EDW) DB | CONN - Technology One Student SOAP - ADF Services,Current Students
