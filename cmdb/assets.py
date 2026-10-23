@@ -65,8 +65,11 @@ class AssetsClient:
     def schemas(self) -> list[dict]:
         return self._values(self.get("/objectschema/list"))
 
-    def create_schema(self, name: str, key: str, description: str) -> dict:
-        return self.post("/objectschema/create", {"name": name, "objectSchemaKey": key, "description": description})
+    def create_schema(self, name: str, key: str, description: str, allow_cross_schema: bool = False) -> dict:
+        body = {"name": name, "objectSchemaKey": key, "description": description}
+        if allow_cross_schema:
+            body["crossSchemaReferencingAllowed"] = True  # may be ignored by Jira; checked again before objects
+        return self.post("/objectschema/create", body)
 
     def object_types(self, schema_id: str) -> list[dict]:
         return self._values(self.get(f"/objectschema/{schema_id}/objecttypes/flat"))

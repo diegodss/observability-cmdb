@@ -125,3 +125,74 @@ def test_http_service(schemas):
     assert response.status_code == 200 and response.json()["resolver_group"] == "Data Squad"
     assert http.get("/ci/Nope").status_code == 404
     assert http.get("/ci/EDW", params={"failed_side": "sideways"}).status_code == 422
+
+
+# ---------------------------------------------------------------- prerequisites and apply gating
+
+def test_required_groups_come_from_the_data(schemas):
+    assert provision.required_groups(schemas) == {"Current Students", "Data Squad", "Integration Squad"}
+
+
+def _args(command, **overrides):
+    import argparse
+    values = {"command": command, "verbose": False, "skip_group_check": False, "yes": False}
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+@pytest.fixture
+def cli(client, monkeypatch):
+    from cmdb import __main__ as cli_module
+    monkeypatch.setattr(cli_module, "_client", lambda config: client)
+    return cli_module
+
+
+def test_missing_group_blocks_apply_before_any_change(cli, client, fake, schemas, monkeypatch, capsys):
+    monkeypatch.setattr(client, "missing_groups", lambda groups: ["Data Squad"])
+    assert cli.cmd_provision(_args("apply", yes=True), schemas, client.config) == 1
+    out = capsys.readouterr().out
+    assert "✗ Jira group 'Data Squad'" in out and "Nothing was changed" in out
+    assert not fake.state.data["schemas"]
+
+
+def test_unverifiable_groups_block_apply_unless_skipped(cli, client, fake, schemas, capsys):
+    # The fake has no Jira group API, so the group check can't be made.
+    assert cli.cmd_provision(_args("apply", yes=True), schemas, client.config) == 1
+    assert not fake.state.data["schemas"]
+    assert cli.cmd_provision(_args("apply", yes=True, skip_group_check=True), schemas, client.config) == 0
+    assert len(fake.state.data["objects"]) == 8
+
+
+def test_apply_without_terminal_or_yes_does_not_change_anything(cli, client, fake, schemas, monkeypatch, capsys):
+    monkeypatch.setattr(client, "missing_groups", lambda groups: [])
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert cli.cmd_provision(_args("apply"), schemas, client.config) == 1
+    assert "--yes" in capsys.readouterr().out and not fake.state.data["schemas"]
+
+
+def test_schema_key_clash_blocks_apply(cli, client, fake, schemas, monkeypatch, capsys):
+    monkeypatch.setattr(client, "missing_groups", lambda groups: [])
+    client.create_schema("Someone else's schema", "INT", "")
+    assert cli.cmd_provision(_args("apply", yes=True), schemas, client.config) == 1
+    assert "✗ Schema key 'INT': already used by schema 'Someone else's schema'" in capsys.readouterr().out
+    assert len(fake.state.data["schemas"]) == 1
+
+
+def test_too_long_description_is_dropped_with_a_warning(client, fake, schemas):
+    fake.state.max_description = 20  # every schema description is longer than this
+    result = provision.run(client, schemas, apply=True)
+    warns = [a for a in result.actions if a.verb == "warn"]
+    assert len(warns) == 3 and all("too long for Assets" in w.detail for w in warns)
+    assert len(fake.state.data["schemas"]) == 3 and len(fake.state.data["objects"]) == 8
+
+
+def test_disabled_cross_schema_references_stop_apply_before_objects(client, fake, schemas):
+    fake.state.honour_cross_schema_flag = False  # Jira ignores the flag at creation
+    result = provision.run(client, schemas, apply=True)
+    blocked = sorted(a.target for a in result.actions if a.verb == "blocked")
+    assert blocked == ["schema Applications", "schema Connectors"]
+    assert len(fake.state.data["schemas"]) == 3 and not fake.state.data["objects"]
+    for schema in fake.state.data["schemas"].values():   # the admin enables the setting in the UI
+        schema["crossSchemaReferencingAllowed"] = True
+    again = provision.run(client, schemas, apply=True)
+    assert again.count("blocked") == 0 and len(fake.state.data["objects"]) == 8

@@ -11,7 +11,7 @@ from .enrich import enrich
 
 
 def create_app(directory_factory) -> FastAPI:
-    app = FastAPI(title="observability-cmdb enricher", version="1.0.0")
+    app = FastAPI(title="observability-cmdb", version="1.0.0")
 
     @app.get("/health")
     def health():

@@ -15,6 +15,8 @@ def create_fake() -> FastAPI:
     ids = itertools.count(1)
     state = {"schemas": {}, "types": {}, "attrs": {}, "statuses": {}, "reftypes": {}, "objects": {}}
     app.state.data = state
+    app.state.max_description = 1000
+    app.state.honour_cross_schema_flag = True
     icons = [{"id": "1", "name": "Application"}, {"id": "2", "name": "Integration"}, {"id": "3", "name": "Generic"}]
 
     def new_id() -> str:
@@ -28,7 +30,12 @@ def create_fake() -> FastAPI:
     @app.post("/objectschema/create")
     async def create_schema(request: Request):
         body = await request.json()
-        schema = {"id": new_id(), "name": body["name"], "objectSchemaKey": body["objectSchemaKey"]}
+        if len(body.get("description", "")) > app.state.max_description:  # mimics Jira's size limit
+            raise HTTPException(400, {"errorMessages": [], "errors": {
+                "description": "i18n.constraint.violation.ObjectSchemaBean.Size.description"}})
+        schema = {"id": new_id(), "name": body["name"], "objectSchemaKey": body["objectSchemaKey"],
+                  "crossSchemaReferencingAllowed": body.get("crossSchemaReferencingAllowed", False)
+                  if app.state.honour_cross_schema_flag else False}
         state["schemas"][schema["id"]] = schema
         return schema
 
@@ -100,6 +107,10 @@ def create_fake() -> FastAPI:
                     target = next((o for o in state["objects"].values() if o["objectKey"] == value), None)
                     if target is None:
                         raise HTTPException(400, f"no object with key {value}")
+                    target_schema = state["schemas"][target["schemaId"]]
+                    if target["schemaId"] != obj["schemaId"] and not target_schema["crossSchemaReferencingAllowed"]:
+                        raise HTTPException(400, {"errors": {"x": f"refers to the schema {target_schema['name']} "
+                                                             "but this schema has cross-schema relations disabled"}})
                     values.append({"referencedObject": {"label": target["label"], "objectKey": value}})
                 elif attribute["type"] == 7:
                     values.append({"status": {"id": value, "name": state["statuses"][str(value)]["name"]}})

@@ -1,40 +1,29 @@
 name: observability-cmdb
 
-# CMDB tooling for the observability stack:
-#   docker compose run --rm cmdb plan        show what would be created in Jira Assets (read-only)
-#   docker compose run --rm cmdb apply       create/update the schemas and objects
-#   docker compose run --rm cmdb lookup EDW  enrich one CI (resolver group, impact)
-#   docker compose up -d enricher            HTTP enrichment service for Keep
-
-x-cmdb: &cmdb
-  build: .
-  image: observability-cmdb:local
-  env_file:
-    - path: .env
-      required: false
-  volumes:
-    - ./schemas:/srv/schemas:ro
-    - ./data:/srv/data
+# One service: the CMDB enrichment API, with the setup commands run inside it.
+#
+#   docker compose up -d                      start the API (http://localhost:8090, http://cmdb:8080 on the network)
+#   curl http://localhost:8090/ci/EDW          enrich a CI
+#   docker compose exec cmdb cmdb plan         setup/admin commands run inside the running service
+#                                              (preflight, plan, apply, lookup, validate, ...)
 
 services:
   cmdb:
-    <<: *cmdb
-    profiles: [tools]
-
-  enricher:
-    <<: *cmdb
-    command: ["serve", "--host", "0.0.0.0", "--port", "8080"]
+    build: .
+    image: observability-cmdb:local
+    container_name: observability-cmdb
     restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./schemas:/srv/schemas:ro
+      - ./data:/srv/data
     ports:
-      - "127.0.0.1:${ENRICHER_HOST_PORT:-8090}:8080"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).status == 200 else 1)"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
+      - "127.0.0.1:${CMDB_HOST_PORT:-8090}:8080"
 
 # Shared with observability-env-simulator and observability-platform, so Keep can call
-# http://enricher:8080. Any of the stacks can start first; the second logs a harmless
+# http://cmdb:8080. Any of the stacks can start first; the second logs a harmless
 # "network was not created for project" warning.
 networks:
   default:

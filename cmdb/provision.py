@@ -7,8 +7,11 @@ reports (but does not change) attributes whose type differs from the definition.
 
 from dataclasses import dataclass, field
 
-from .assets import AssetsClient
+from .assets import AssetsClient, AssetsError
 from .model import DEFAULT_TYPES, Attribute, ObjectType, Schema, load_objects
+
+CROSS_SCHEMA_HELP = ("cross-schema references are disabled: in Assets open the schema > Schema configuration > "
+                     "General and enable 'Allow others to select objects from this schema', then re-run apply")
 
 # Status category: 0 = inactive, 1 = active, 2 = pending
 STATUS_CATEGORY = {"Production": 1, "Production - To Retire": 1, "Development": 2, "Retired": 0}
@@ -49,20 +52,29 @@ class Provisioner:
         self._icons: list[dict] | None = None
 
     def run(self) -> Result:
-        groups = {r.get("Resolver Group", "") for s in self.schemas for t in s.object_types
-                  for r in load_objects(t)} - {""}
-        missing = self.client.missing_groups(groups)
-        if missing:
-            self.result.add("warn", "Jira groups", f"not found: {missing}. Group values that don't match an existing group are not stored.")
         for schema in self.schemas:
             self._schema(schema)
         for schema in self.schemas:
             for object_type in schema.object_types:
                 self._attributes(schema, object_type)
+        if self._cross_schema_blocked() and self.apply:
+            return self.result  # objects would be rejected by Jira; stop before creating any
         for schema in self.schemas:
             for object_type in schema.object_types:
                 self._objects(schema, object_type)
         return self.result
+
+    def _cross_schema_blocked(self) -> bool:
+        """Schemas referenced from other schemas need 'Allow others to select objects' enabled."""
+        blocked = False
+        settings = {s["name"]: s for s in self.client.schemas()}
+        for name in sorted(referenced_schemas(self.schemas)):
+            current = settings.get(name)
+            if current is None or current.get("crossSchemaReferencingAllowed", True):
+                continue
+            blocked = True
+            self.result.add("blocked", f"schema {name}", CROSS_SCHEMA_HELP)
+        return blocked
 
     # ------------------------------------------------------------------ structure
     def _schema(self, schema: Schema) -> None:
@@ -71,7 +83,11 @@ class Provisioner:
             schema_id = str(existing["id"])
             self.result.add("ok", f"schema {schema.name}", f"key {existing.get('objectSchemaKey', '?')}")
         elif self.apply:
-            schema_id = str(self.client.create_schema(schema.name, schema.key, schema.description)["id"])
+            created = self._with_description(f"schema {schema.name}", schema.description,
+                                             lambda d: self.client.create_schema(
+                                                 schema.name, schema.key, d,
+                                                 allow_cross_schema=schema.name in referenced_schemas(self.schemas)))
+            schema_id = str(created["id"])
             self.result.add("create", f"schema {schema.name}", f"key {schema.key}")
         else:
             schema_id = None
@@ -94,7 +110,9 @@ class Provisioner:
         for object_type in schema.object_types:
             self.type_ids[(schema.name, object_type.name)] = self._ensure(
                 current.get(object_type.name), f"object type {schema.name}/{object_type.name}",
-                lambda t=object_type: self.client.create_object_type(schema_id, t.name, t.description, self._icon(t.icon)))
+                lambda t=object_type: self._with_description(
+                    f"object type {schema.name}/{t.name}", t.description,
+                    lambda d: self.client.create_object_type(schema_id, t.name, d, self._icon(t.icon))))
 
     def _ensure(self, existing: dict | None, target: str, create) -> str | None:
         if existing:
@@ -102,6 +120,16 @@ class Provisioner:
             return str(existing["id"])
         self.result.add("create", target)
         return str(create()["id"]) if self.apply else None
+
+    def _with_description(self, target: str, description: str, create):
+        """Create with the description; if Assets rejects it as too long, create without it and warn."""
+        try:
+            return create(description)
+        except AssetsError as exc:
+            if not description or "Size.description" not in str(exc):
+                raise
+            self.result.add("warn", target, f"description ({len(description)} chars) too long for Assets; created without it")
+            return create("")
 
     def _icon(self, name: str) -> str:
         if self._icons is None:
@@ -133,7 +161,9 @@ class Provisioner:
                 continue
             self.result.add("create", target, attribute.type)
             if self.apply and type_id:
-                self.client.create_attribute(type_id, self._body(schema, attribute))
+                body = self._body(schema, attribute)
+                self._with_description(target, body["description"],
+                                       lambda d: self.client.create_attribute(type_id, {**body, "description": d}))
 
     def _body(self, schema: Schema, attribute: Attribute) -> dict:
         body = {"name": attribute.name, "description": attribute.description,
@@ -220,3 +250,52 @@ def _normal(attribute: Attribute, value: str) -> str:
 
 def run(client: AssetsClient, schemas: list[Schema], apply: bool) -> Result:
     return Provisioner(client, schemas, apply).run()
+
+
+def referenced_schemas(schemas: list[Schema]) -> set[str]:
+    """Schemas whose objects are referenced from another schema."""
+    return {target for schema in schemas for target in schema.depends_on()}
+
+
+def required_groups(schemas: list[Schema]) -> set[str]:
+    """Every Jira group named in a Group attribute of the data files."""
+    return {value for schema in schemas for object_type in schema.object_types
+            for attribute in object_type.attributes if attribute.type == "group"
+            for row in load_objects(object_type) for value in attribute.values(row.get(attribute.name, ""))}
+
+
+def preflight(client: AssetsClient, schemas: list[Schema]) -> list[tuple[str, bool | None, str]]:
+    """Read-only prerequisite checks: (check, passed (None = could not check), detail)."""
+    checks = []
+    try:
+        existing = client.schemas()
+        checks.append(("Jira Assets access", True, f"workspace reachable, {len(existing)} existing schema(s)"))
+    except Exception as exc:  # noqa: BLE001 - reported to the user
+        return [("Jira Assets access", False, str(exc))]
+    by_name = {s.get("name"): s for s in existing}
+    for name in sorted(referenced_schemas(schemas)):
+        current = by_name.get(name)
+        if current is None:
+            checks.append((f"Cross-schema references on '{name}'", True, "schema not created yet; requested at creation"))
+        elif current.get("crossSchemaReferencingAllowed", True):
+            checks.append((f"Cross-schema references on '{name}'", True, "allowed"))
+        else:
+            checks.append((f"Cross-schema references on '{name}'", False, CROSS_SCHEMA_HELP.split(": ", 1)[1]))
+    by_key = {str(s.get("objectSchemaKey", "")).upper(): s for s in existing}
+    for schema in schemas:
+        clash = by_key.get(schema.key.upper())
+        if clash and clash.get("name") != schema.name:
+            checks.append((f"Schema key '{schema.key}'", False,
+                           f"already used by schema '{clash.get('name')}': change `key:` in schemas/*.yaml"))
+        else:
+            checks.append((f"Schema key '{schema.key}'", True,
+                           f"used by '{schema.name}' already" if clash else f"free for '{schema.name}'"))
+    groups = required_groups(schemas)
+    missing = client.missing_groups(groups)
+    if missing is None:
+        checks.append(("Jira groups", None, f"could not verify {sorted(groups)} (no group read access, or a non-Cloud base URL)"))
+    else:
+        for group in sorted(groups):
+            checks.append((f"Jira group '{group}'", group not in missing,
+                           "exists" if group not in missing else "MISSING: create it in admin.atlassian.com > Directory > Groups, or change it in data/*.csv"))
+    return checks

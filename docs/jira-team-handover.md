@@ -27,33 +27,54 @@ Also created, per schema:
 1. **Service account:** create one with an API token (https://id.atlassian.com/manage-profile/security/api-tokens).
    - `apply` needs Assets admin rights, to create schemas.
    - Day-to-day lookups only need read access to the three schemas.
-2. **Resolver groups:** the definitions use these Jira groups. Create them, or map the placeholders to
-   your real groups:
+2. **Resolver groups: required before `apply`.** Every group in `data/*.csv` must exist in Jira:
 
-   | Placeholder in `data/*.csv` | Used for |
+   | Group | Used for |
    |---|---|
    | `Current Students` | Technology One (SM) and the 4 integrations |
    | `Data Squad` | EDW |
-   | `Integration & Platforms` | the 2 connectors |
+   | `Integration Squad` | the 2 connectors |
 
-   Group values that don't match an existing group aren't stored, and `plan` lists any that are missing.
-3. **Names:** schema keys (`APP`, `CON`, `INT`), schema names, type names and attribute names are
+   - **Create them** in admin.atlassian.com → your site → Directory → Groups, or change the names in
+     `data/*.csv` and `data/initial-load/scope-*.csv` to groups you already have.
+   - **Check** with `docker compose exec cmdb cmdb preflight`, which marks each group ✓ or ✗.
+   - **`apply` refuses to run** while a group is missing, so objects never end up without a resolver.
+3. **Cross-schema references: required before objects can be created.** After the first `apply` has
+   created the schemas, open **Applications** and **Connectors** in Assets → Schema configuration →
+   General, and enable *"Allow others to select objects from this schema"*. Integrations points to
+   objects in both, and Connectors points to Applications. `apply` stops before creating objects
+   while this is off (marked ✗ in `preflight`). Enable it, then run `apply` again; it continues
+   where it stopped.
+4. **Names:** schema keys (`APP`, `CON`, `INT`), schema names, type names and attribute names are
    placeholders. If you have naming standards, edit `schemas/*.yaml` before the first `apply`.
-4. **Existing application type:** if your CMDB already has one, the Applications schema is a proposal.
+   `preflight` fails if a key is already used by another schema.
+5. **Existing application type:** if your CMDB already has one, the Applications schema is a proposal.
    Point the reference attributes in `connectors.yaml` and `integrations.yaml` (`schema:` /
    `object_type:`) at your type, and remove `schemas/applications.yaml`.
 
 ## Run
 
+The repo runs as **one service** (`cmdb`): an always-on enrichment API, with the setup commands run
+inside it.
+
 ```bash
 cp .env.example .env     # JIRA_SITE, JIRA_EMAIL, JIRA_API_TOKEN
-docker compose build
-docker compose run --rm cmdb validate     # offline
-docker compose run --rm cmdb plan         # read-only: review the list
-docker compose run --rm cmdb apply
-docker compose run --rm cmdb plan         # expect: 0 create, 0 update
-docker compose run --rm cmdb lookup EDW   # read back: resolver group Data Squad, impact 4 integrations
+docker compose up -d --build
+docker compose exec cmdb cmdb validate     # offline
+docker compose exec cmdb cmdb preflight    # read-only: access, schema keys, cross-schema, every resolver group
+docker compose exec cmdb cmdb plan         # read-only: prerequisites, then the list of changes
+docker compose exec cmdb cmdb apply        # re-checks, shows the plan, asks "Apply N change(s)? [y/N]"
+docker compose exec cmdb cmdb plan         # expect: 0 create, 0 update
+curl http://localhost:8090/ci/EDW          # read back: resolver group Data Squad, impact 4 integrations
 ```
+
+**Not using Compose?** Open a shell in the container (`docker exec -it observability-cmdb sh`) and run
+`cmdb preflight`, `cmdb plan`, `cmdb apply`. See "Running without Docker Compose" in the README.
+
+**Permissions:**
+- `apply` needs **Assets admin** rights. Pass an admin token just for that command:
+  `docker compose exec -e JIRA_EMAIL=… -e JIRA_API_TOKEN=… cmdb cmdb apply`.
+- The running service only needs **read** access.
 
 `plan` output marks each item:
 
@@ -62,15 +83,18 @@ docker compose run --rm cmdb lookup EDW   # read back: resolver group Data Squad
 | `+` | create |
 | `~` | update (lists the changed attributes) |
 | `!` | drift (left unchanged) |
-| `?` | warning (e.g. missing Jira groups) |
+| `?` | warning |
+
+The prerequisites block at the top marks each check ✓ (passed), ✗ (failed: `apply` won't run) or ?
+(couldn't be verified: `apply` won't run unless `--skip-group-check` is given).
 
 ## After setup
 
 - **Objects** are maintained in Jira Assets, which is now the source of truth.
 - **Structure** changes go through `schemas/*.yaml` and `plan`/`apply`, so the definitions and Jira
   stay in step.
-- **The enrichment service** (`docker compose up -d enricher`) only needs read access. Keep calls it
-  with each alert's CI name to get the resolver group and impact.
+- **The enrichment API** (the running `cmdb` service) only needs read access. Keep calls
+  `http://cmdb:8080/ci/{ci_name}` with each alert's CI name to get the resolver group and impact.
 
 ## If something fails
 

@@ -3,7 +3,7 @@
 schema:
   name: Integrations
   key: INT
-  description: Integrations between applications; loaded once from the Integrations SOT, managed here afterwards.
+  description: Integrations between applications (initial load from the Integrations SOT).
 
 statuses: [Production, Production - To Retire, Development, Retired]
 

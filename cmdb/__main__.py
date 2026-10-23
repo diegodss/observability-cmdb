@@ -1,8 +1,9 @@
 """observability-cmdb command line.
 
     validate                 offline check of schemas/*.yaml and data/*.csv
-    plan                     show what apply would change in Jira Assets (read-only)
-    apply                    create/update schemas, types, attributes and objects
+    preflight                check prerequisites in Jira: access, resolver groups (read-only)
+    plan                     prerequisites + what apply would change in Jira Assets (read-only)
+    apply [--yes]            check prerequisites, show the plan, confirm, then create/update
     lookup NAME [--failed-side source|target|self] [--json]
                              enrich one CI (resolver group, root CI, impact)
     serve [--host H] [--port P]
@@ -51,6 +52,35 @@ def cmd_validate(_args, schemas, _config) -> int:
     return 1 if problems else 0
 
 
+def _print_preflight(checks, skip_groups: bool) -> bool:
+    """Print the checks; True when nothing blocks an apply."""
+    print("Prerequisites")
+    ok = True
+    for name, passed, detail in checks:
+        mark = {True: "✓", False: "✗", None: "?"}[passed]
+        print(f"  {mark} {name}: {detail}")
+        if passed is False or (passed is None and not skip_groups):
+            ok = False
+    print()
+    return ok
+
+
+def _print_result(result, verbose: bool) -> None:
+    symbols = {"create": "+", "update": "~", "ok": " ", "drift": "!", "warn": "?", "blocked": "✗"}
+    for action in result.actions:
+        if action.verb != "ok" or verbose:
+            print(f"  {symbols[action.verb]} {action.verb:<6} {action.target}{f'  ({action.detail})' if action.detail else ''}")
+    print("\n" + ", ".join(f"{result.count(v)} {v}" for v in ("create", "update", "ok", "drift", "warn", "blocked")))
+
+
+def cmd_preflight(args, schemas, config) -> int:
+    client = _client(config)
+    print(f"Checking {config.jira_site or client.base}\n")
+    ok = _print_preflight(provision.preflight(client, schemas), skip_groups=False)
+    print("Ready for `apply`." if ok else "Not ready: fix the items marked ✗ (or ?) first.")
+    return 0 if ok else 1
+
+
 def cmd_provision(args, schemas, config) -> int:
     problems = model.validate(schemas)
     if problems:
@@ -58,16 +88,37 @@ def cmd_provision(args, schemas, config) -> int:
         return 1
     client = _client(config)
     apply = args.command == "apply"
-    print(f"{'Applying to' if apply else 'Plan for'} {client.base}\n")
-    result = provision.run(client, schemas, apply=apply)
-    symbols = {"create": "+", "update": "~", "ok": " ", "drift": "!", "warn": "?"}
-    for action in result.actions:
-        if action.verb != "ok" or args.verbose:
-            print(f"  {symbols[action.verb]} {action.verb:<6} {action.target}{f'  ({action.detail})' if action.detail else ''}")
-    summary = ", ".join(f"{result.count(v)} {v}" for v in ("create", "update", "ok", "drift", "warn"))
-    print(f"\n{summary}")
-    if not apply and (result.count("create") or result.count("update")):
-        print("Run `apply` to make these changes.")
+    target = config.jira_site or client.base
+    print(f"{'Apply to' if apply else 'Plan for'} {target}\n")
+    ready = _print_preflight(provision.preflight(client, schemas), skip_groups=args.skip_group_check)
+    plan = provision.run(client, schemas, apply=False)
+    _print_result(plan, args.verbose)
+    changes = plan.count("create") + plan.count("update")
+    if not apply:
+        if changes:
+            print("Run `apply` to make these changes." if ready else "Fix the prerequisites above, then run `apply`.")
+        return 0 if ready else 1
+    if not ready:
+        print("\nNot applying: prerequisites failed (see above). Nothing was changed.")
+        return 1
+    if not changes:
+        print("\nNothing to apply.")
+        return 0
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("\nNot applying: no terminal to confirm. Re-run with --yes to apply without a prompt.")
+            return 1
+        answer = input(f"\nApply {changes} change(s) to {target}? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("Cancelled. Nothing was changed.")
+            return 1
+    print("\nApplying...\n")
+    result = provision.run(client, schemas, apply=True)
+    _print_result(result, args.verbose)
+    if result.count("blocked"):
+        print("\nStopped before creating objects: fix the items marked ✗ blocked, then re-run apply.")
+        return 1
+    print("\nDone. Run `plan` again: it should report 0 create, 0 update.")
     return 0
 
 
@@ -126,9 +177,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="cmdb", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("validate")
+    sub.add_parser("preflight")
     for name in ("plan", "apply"):
         p = sub.add_parser(name)
         p.add_argument("-v", "--verbose", action="store_true", help="also list items that are already in place")
+        p.add_argument("--skip-group-check", action="store_true",
+                       help="proceed when group existence can't be verified (not when groups are missing)")
+        if name == "apply":
+            p.add_argument("-y", "--yes", action="store_true", help="apply without the confirmation prompt")
     p = sub.add_parser("lookup")
     p.add_argument("name")
     p.add_argument("--failed-side", choices=["source", "target", "self"])
@@ -141,7 +197,7 @@ def main() -> int:
     args = parser.parse_args()
     schemas = model.load_schemas()
     config = Config.from_env()
-    handler = {"validate": cmd_validate, "plan": cmd_provision, "apply": cmd_provision, "lookup": cmd_lookup,
+    handler = {"validate": cmd_validate, "preflight": cmd_preflight, "plan": cmd_provision, "apply": cmd_provision, "lookup": cmd_lookup,
                "serve": cmd_serve, "initial-load": cmd_initial_load}[args.command]
     try:
         return handler(args, schemas, config)
